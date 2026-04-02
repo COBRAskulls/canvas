@@ -71,10 +71,21 @@ export default function Editor() {
     setDeployState('idle')
 
     const elementContext = selectedElement
-      ? `element <${selectedElement.tag}> with classes "${selectedElement.classes}" and text "${selectedElement.text.slice(0, 100)}"`
+      ? `a <${selectedElement.tag}> element${selectedElement.classes ? ` with class "${selectedElement.classes.replace('canvas-hover','').replace('canvas-selected','').trim()}"` : ''}${selectedElement.text ? ` that currently contains the text "${selectedElement.text.slice(0, 150)}"` : ''}`
       : 'the relevant element'
 
-    const message = `In the ${selectedRepo.name} project, find the ${elementContext} and ${instruction}. Push the change to GitHub when done.`
+    const message = `You are editing the ${selectedRepo.name} GitHub repo (https://github.com/COBRAskulls/${selectedRepo.name}).
+
+The user has selected ${elementContext}.
+
+Their instruction: ${instruction}
+
+Please:
+1. Find this exact element in the repo's source files
+2. Make the requested change
+3. Push to GitHub when done
+
+Be direct — just find it and change it.`
 
     const userMsg: Message = { role: 'user', content: instruction, ts: Date.now() }
     setMessages(prev => [...prev, userMsg])
@@ -227,25 +238,33 @@ export default function Editor() {
           <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Selected Element</div>
           {selectedElement ? (
             <div className="bg-[#0a0a0a] rounded-lg p-3 border border-[#2a2a2a] space-y-2">
-              <div>
-                <span className="text-xs text-gray-600">Tag</span>
-                <div className="text-sm text-[#c9a84c] font-mono">&lt;{selectedElement.tag}&gt;</div>
+              <div className="flex gap-3">
+                <div>
+                  <span className="text-xs text-gray-600">Tag</span>
+                  <div className="text-sm text-[#c9a84c] font-mono">&lt;{selectedElement.tag}&gt;</div>
+                </div>
+                {selectedElement.id && (
+                  <div>
+                    <span className="text-xs text-gray-600">ID</span>
+                    <div className="text-xs text-gray-400 font-mono">#{selectedElement.id}</div>
+                  </div>
+                )}
               </div>
               {selectedElement.classes && (
                 <div>
-                  <span className="text-xs text-gray-600">Classes</span>
-                  <div className="text-xs text-gray-400 font-mono break-all">{selectedElement.classes.slice(0, 80)}</div>
+                  <span className="text-xs text-gray-600">Class</span>
+                  <div className="text-xs text-gray-400 font-mono break-all">{selectedElement.classes.replace('canvas-hover','').replace('canvas-selected','').trim().slice(0,80)}</div>
                 </div>
               )}
               {selectedElement.text && (
                 <div>
-                  <span className="text-xs text-gray-600">Text</span>
-                  <div className="text-sm text-white">{selectedElement.text.slice(0, 100)}</div>
+                  <span className="text-xs text-gray-600">Current text</span>
+                  <div className="text-sm text-white font-medium">"{selectedElement.text.slice(0, 120)}"</div>
                 </div>
               )}
             </div>
           ) : (
-            <div className="text-xs text-gray-600 italic">Click any element in the preview</div>
+            <div className="text-xs text-gray-600 italic">Click any element in the preview to select it</div>
           )}
         </div>
 
