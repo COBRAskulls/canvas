@@ -83,61 +83,89 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Missing repo or instruction' }, { status: 400 })
   }
 
-  // Step 1: Ask Rosie to figure out the exact edit (what to find/replace)
-  const rosiePrompt = `You are a code editor. I need you to make an edit to the ${repo} GitHub repo.
+  // Step 1: Find the file and locate the element using its known text
+  // We search for the element's current text in the source files — no need to ask Rosie
+  const targetFiles = ['index.html', 'pages/index.js', 'app/page.tsx', 'app/page.jsx']
+  let fileData: any = null
+  let chosenFile = 'index.html'
 
-Selected element: ${element ? `<${element.tag}> with class "${element.classes?.replace('canvas-hover','').replace('canvas-selected','').trim()}" containing text "${element.text}"` : 'unknown element'}
-
-Instruction: ${instruction}
-
-Respond with ONLY a JSON object in this exact format, no other text:
-{
-  "file": "index.html",
-  "find": "exact text to find in the file",
-  "replace": "exact replacement text",
-  "description": "one line describing what changed"
-}
-
-The file is most likely index.html. The find text should be the exact HTML including the element tag and content as it appears in the source.`
-
-  const rosieRes = await fetch(`${process.env.NEXT_PUBLIC_ROSIE_API_URL}/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.PROXY_API_KEY}` },
-    body: JSON.stringify({ message: rosiePrompt })
-  })
-  const rosieData = await rosieRes.json()
-  const reply = rosieData.reply || ''
-
-  // Parse the JSON from Rosie's response
-  let editPlan: { file: string; find: string; replace: string; description: string } | null = null
-  try {
-    const jsonMatch = reply.match(/\{[\s\S]*\}/)
-    if (jsonMatch) editPlan = JSON.parse(jsonMatch[0])
-  } catch {
-    return NextResponse.json({ 
-      error: 'Could not parse edit plan from Rosie',
-      rosieReply: reply 
-    }, { status: 500 })
+  for (const f of targetFiles) {
+    const fd = await ghGet(`/repos/COBRAskulls/${repo}/contents/${f}`)
+    if (fd.content) { fileData = fd; chosenFile = f; break }
   }
 
-  if (!editPlan) {
-    return NextResponse.json({ error: 'No edit plan returned', rosieReply: reply }, { status: 500 })
-  }
-
-  // Step 2: Fetch the file from GitHub
-  const fileData = await ghGet(`/repos/COBRAskulls/${repo}/contents/${editPlan.file}`)
-  if (!fileData.content) {
-    return NextResponse.json({ error: `Could not fetch ${editPlan.file} from GitHub` }, { status: 500 })
+  if (!fileData?.content) {
+    return NextResponse.json({ error: 'Could not find source file in GitHub repo' }, { status: 500 })
   }
 
   const originalContent = Buffer.from(fileData.content, 'base64').toString('utf-8')
 
+  // Step 2: Determine what to change using element context + instruction
+  // Strategy: find the element's current text in the file, then apply the instruction
+  const elementText = element?.text?.trim() || ''
+  const elementClasses = element?.classes?.replace('canvas-hover','').replace('canvas-selected','').trim() || ''
+  const elementTag = element?.tag || ''
+
+  let editPlan: { find: string; replace: string; description: string } | null = null
+
+  // Try to find the element in the file by its text content
+  if (elementText && originalContent.includes(elementText)) {
+    // Find the surrounding HTML context (the line containing the text)
+    const lines = originalContent.split('\n')
+    const lineIdx = lines.findIndex(l => l.includes(elementText))
+    
+    if (lineIdx >= 0) {
+      const line = lines[lineIdx]
+      // Interpret the instruction to figure out what the replacement should be
+      // For simple text changes, extract the new text from the instruction
+      let newText = elementText
+      
+      // Parse instruction for common patterns
+      const changeToMatch = instruction.match(/(?:change|update|make|set|rename).*?(?:to|as|be)\s+["']?(.+?)["']?\s*$/i)
+      const removeMatch = instruction.match(/(?:remove|delete|get rid of)\s+["']?(.+?)["']?/i)
+      const addMatch = instruction.match(/(?:add|append|prepend|insert)\s+["']?(.+?)["']?/i)
+      
+      if (removeMatch) {
+        // Remove a specific word/phrase from the text
+        const toRemove = removeMatch[1].trim()
+        newText = elementText.replace(new RegExp(toRemove, 'gi'), '').replace(/\s+/g, ' ').trim()
+      } else if (changeToMatch) {
+        newText = changeToMatch[1].trim()
+      } else {
+        // Fall through to Rosie for complex instructions — but get raw JSON back via a special prompt
+        // Ask Rosie but force it to only return the replacement text
+        const rosieRes = await fetch(`${process.env.NEXT_PUBLIC_ROSIE_API_URL}/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.PROXY_API_KEY}` },
+          body: JSON.stringify({
+            message: `The current text of an element is: "${elementText}"\nThe instruction is: "${instruction}"\nReply with ONLY the new text value, nothing else. No quotes, no explanation.`
+          })
+        })
+        const rd = await rosieRes.json()
+        const raw = (rd.reply || '').trim()
+        // Strip surrounding quotes if any
+        newText = raw.replace(/^["']|["']$/g, '').trim() || elementText
+      }
+
+      const newLine = line.replace(elementText, newText)
+      editPlan = {
+        find: line,
+        replace: newLine,
+        description: `Changed "${elementText}" to "${newText}"`
+      }
+    }
+  }
+
+  if (!editPlan) {
+    return NextResponse.json({
+      error: `Could not locate element with text "${elementText.slice(0,80)}" in ${chosenFile}. Try selecting a more specific element.`
+    }, { status: 422 })
+  }
+
   // Step 3: Apply the edit
   if (!originalContent.includes(editPlan.find)) {
-    // Try case-insensitive search to give better error
     return NextResponse.json({ 
-      error: `Could not find the text to replace. Looking for: "${editPlan.find.slice(0,100)}"`,
-      rosieReply: reply
+      error: `Could not find the exact line to replace in ${chosenFile}`
     }, { status: 422 })
   }
 
