@@ -172,7 +172,7 @@ export async function POST(req: NextRequest) {
   const newContent = originalContent.replace(editPlan.find, editPlan.replace)
 
   // Step 4: Push to GitHub
-  const pushResult = await ghPut(`/repos/COBRAskulls/${repo}/contents/${editPlan.file}`, {
+  const pushResult = await ghPut(`/repos/COBRAskulls/${repo}/contents/${chosenFile}`, {
     message: `Canvas edit: ${editPlan.description}`,
     content: Buffer.from(newContent).toString('base64'),
     sha: fileData.sha,
@@ -182,19 +182,19 @@ export async function POST(req: NextRequest) {
     // Trigger Vercel deploy from the updated GitHub files
     let vercelProjectId: string | null = null
     try {
-      vercelProjectId = await triggerDeploy(repo, editPlan.file, newContent)
+      vercelProjectId = await triggerDeploy(repo, chosenFile, newContent)
     } catch (_) {}
 
     return NextResponse.json({ 
       success: true, 
       description: editPlan.description,
       commit: pushResult.commit.sha?.slice(0, 7),
-      file: editPlan.file,
+      file: chosenFile,
       vercelProjectId,
       // Include undo info
       undo: {
         repo,
-        file: editPlan.file,
+        file: chosenFile,
         content: Buffer.from(originalContent).toString('base64'),
         sha: pushResult.content?.sha, // sha of the new file for next update
         description: editPlan.description,
