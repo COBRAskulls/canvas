@@ -22,28 +22,41 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a]">
-      <div className="w-full max-w-sm">
+    <div className="min-h-screen flex items-center justify-center bg-[#1a1a2e]">
+      <div className="w-full max-w-sm px-4">
         <div className="text-center mb-8">
-          <div className="w-11 h-11 rounded-xl bg-[#c9a84c] flex items-center justify-center text-black font-bold text-lg mx-auto mb-3">C</div>
-          <h1 className="text-xl font-bold text-white">Canvas</h1>
-          <p className="text-sm text-gray-500 mt-1">Sign in to your workspace</p>
+          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#7c3aed] to-[#4f46e5] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-[#7c3aed]/30">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <rect x="2" y="2" width="7" height="7" rx="1" fill="white" fillOpacity="0.9"/>
+              <rect x="11" y="2" width="7" height="7" rx="1" fill="white" fillOpacity="0.5"/>
+              <rect x="2" y="11" width="7" height="7" rx="1" fill="white" fillOpacity="0.5"/>
+              <rect x="11" y="11" width="7" height="7" rx="1" fill="white" fillOpacity="0.9"/>
+            </svg>
+          </div>
+          <h1 className="text-xl font-bold text-white tracking-tight">Canvas</h1>
+          <p className="text-sm text-[#4a5568] mt-1">Visual site editor</p>
         </div>
-        <form onSubmit={handleLogin} className="bg-[#161616] border border-[#222] rounded-2xl p-6 space-y-4">
-          {error && <div className="text-red-400 text-sm bg-red-950/30 border border-red-900/50 rounded-lg px-3 py-2">{error}</div>}
+
+        <form onSubmit={handleLogin} className="bg-[#16213e] border border-[#0f3460]/60 rounded-2xl p-6 space-y-4 shadow-xl">
+          {error && (
+            <div className="text-red-400 text-xs bg-red-950/30 border border-red-900/40 rounded-lg px-3 py-2">{error}</div>
+          )}
           <div>
-            <label className="text-xs font-semibold text-gray-400 uppercase tracking-wide block mb-1.5">Email</label>
+            <label className="text-[10px] font-semibold text-[#4a5568] uppercase tracking-widest block mb-1.5">Email</label>
             <input type="email" value={email} onChange={e => setEmail(e.target.value)}
-              className="w-full bg-[#0a0a0a] border border-[#333] rounded-lg px-3 py-2.5 text-sm text-white outline-none focus:border-[#c9a84c] transition-colors" />
+              className="w-full bg-[#0f1b35] border border-[#0f3460]/50 rounded-lg px-3 py-2.5 text-sm text-white outline-none focus:border-[#7c3aed]/60 transition-colors" />
           </div>
           <div>
-            <label className="text-xs font-semibold text-gray-400 uppercase tracking-wide block mb-1.5">Password</label>
-            <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Enter your password"
-              className="w-full bg-[#0a0a0a] border border-[#333] rounded-lg px-3 py-2.5 text-sm text-white outline-none focus:border-[#c9a84c] transition-colors" />
+            <label className="text-[10px] font-semibold text-[#4a5568] uppercase tracking-widest block mb-1.5">Password</label>
+            <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••"
+              className="w-full bg-[#0f1b35] border border-[#0f3460]/50 rounded-lg px-3 py-2.5 text-sm text-white outline-none focus:border-[#7c3aed]/60 transition-colors"
+              onKeyDown={e => { if (e.key === 'Enter') handleLogin(e as any) }} />
           </div>
           <button type="submit" disabled={loading}
-            className="w-full bg-[#c9a84c] hover:bg-[#e8c97a] text-black font-semibold rounded-lg py-2.5 text-sm transition-colors disabled:opacity-50">
-            {loading ? 'Signing in…' : 'Sign In'}
+            className="w-full bg-gradient-to-r from-[#7c3aed] to-[#4f46e5] hover:from-[#6d28d9] hover:to-[#4338ca] text-white font-semibold rounded-lg py-2.5 text-sm transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+            {loading ? (
+              <><span className="w-3.5 h-3.5 rounded-full border-2 border-white/30 border-t-white animate-spin"></span>Signing in...</>
+            ) : 'Sign In'}
           </button>
         </form>
       </div>
