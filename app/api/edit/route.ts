@@ -109,10 +109,29 @@ export async function POST(req: NextRequest) {
   let editPlan: { find: string; replace: string; description: string } | null = null
 
   // Try to find the element in the file by its text content
-  if (elementText && originalContent.includes(elementText)) {
-    // Find the surrounding HTML context (the line containing the text)
-    const lines = originalContent.split('\n')
-    const lineIdx = lines.findIndex(l => l.includes(elementText))
+  // Note: innerText may be CSS-transformed (e.g. uppercase via text-transform)
+  // So try exact match first, then case-insensitive
+  const lowerText = elementText.toLowerCase()
+  const lines = originalContent.split('\n')
+
+  const findLineIndex = () => {
+    // Exact match first
+    let idx = lines.findIndex(l => l.includes(elementText))
+    if (idx >= 0) return idx
+    // Case-insensitive match (handles CSS text-transform: uppercase)
+    idx = lines.findIndex(l => l.toLowerCase().includes(lowerText))
+    if (idx >= 0) return idx
+    // Try matching by class name if we have one
+    if (elementClasses) {
+      const classFragments = elementClasses.split(' ').filter(Boolean)
+      idx = lines.findIndex(l => classFragments.some(c => l.includes(c)))
+      if (idx >= 0) return idx
+    }
+    return -1
+  }
+
+  if (elementText) {
+    const lineIdx = findLineIndex()
     
     if (lineIdx >= 0) {
       const line = lines[lineIdx]
@@ -147,11 +166,26 @@ export async function POST(req: NextRequest) {
         newText = raw.replace(/^["']|["']$/g, '').trim() || elementText
       }
 
-      const newLine = line.replace(elementText, newText)
+      // Replace in the line — try exact first, then case-insensitive
+      let newLine: string
+      let actualOldText = elementText
+      if (line.includes(elementText)) {
+        newLine = line.replace(elementText, newText)
+      } else {
+        // Case-insensitive replace — find the actual text in the line
+        const regex = new RegExp(elementText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+        const match = line.match(regex)
+        if (match) {
+          actualOldText = match[0]
+          newLine = line.replace(regex, newText)
+        } else {
+          newLine = line // fallback, shouldn't reach
+        }
+      }
       editPlan = {
         find: line,
         replace: newLine,
-        description: `Changed "${elementText}" to "${newText}"`
+        description: `Changed "${actualOldText}" to "${newText}"`
       }
     }
   }
