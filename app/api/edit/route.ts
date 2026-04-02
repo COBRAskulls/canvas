@@ -163,6 +163,14 @@ The file is most likely index.html. The find text should be the exact HTML inclu
       commit: pushResult.commit.sha?.slice(0, 7),
       file: editPlan.file,
       vercelProjectId,
+      // Include undo info
+      undo: {
+        repo,
+        file: editPlan.file,
+        content: Buffer.from(originalContent).toString('base64'),
+        sha: pushResult.content?.sha, // sha of the new file for next update
+        description: editPlan.description,
+      }
     })
   }
 

@@ -52,6 +52,8 @@ export default function Editor() {
   const [sending, setSending] = useState(false)
   const [progress, setProgress] = useState<ProgressStep[]>([])
   const [deployState, setDeployState] = useState<DeployState>('idle')
+  const [undoData, setUndoData] = useState<{repo: string; file: string; content: string; description: string} | null>(null)
+  const [undoing, setUndoing] = useState(false)
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const router = useRouter()
@@ -124,10 +126,15 @@ export default function Editor() {
         setProgress(EDIT_STEPS.map((label, i) => ({ label, state: 'done' as const })))
         const reply = `✅ **${data.description}**\nPushed to GitHub · commit \`${data.commit}\``
         setMessages(prev => [...prev, { role: 'rosie', content: reply, ts: Date.now() }])
+        // Store undo data
+        if (data.undo) setUndoData(data.undo)
         if (selectedRepo.vercelProjectId) {
           setDeployState('waiting')
           pollDeploy(selectedRepo.vercelProjectId, Date.now())
         }
+        // Also trigger deploy polling for direct-deployed repos
+        setDeployState('building')
+        setTimeout(() => setDeployState('live'), 40000)
       } else {
         setProgress(EDIT_STEPS.map((label, i) => ({
           label, state: i < 3 ? 'done' as const : i === 3 ? 'error' as const : 'pending' as const
@@ -163,6 +170,31 @@ export default function Editor() {
       setTimeout(() => pollDeploy(projectId, startTime), 5000)
     } else {
       setTimeout(() => pollDeploy(projectId, startTime), 8000)
+    }
+  }
+
+  async function handleUndo() {
+    if (!undoData || undoing) return
+    setUndoing(true)
+    try {
+      const res = await fetch('/api/undo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(undoData)
+      })
+      const data = await res.json()
+      if (data.success) {
+        setMessages(prev => [...prev, { role: 'rosie', content: `↩️ Reverted "${undoData.description}" (commit ${data.commit})`, ts: Date.now() }])
+        setUndoData(null)
+        setDeployState('building')
+        setTimeout(() => setDeployState('live'), 40000)
+      } else {
+        setMessages(prev => [...prev, { role: 'rosie', content: `❌ Undo failed: ${data.error}`, ts: Date.now() }])
+      }
+    } catch {
+      setMessages(prev => [...prev, { role: 'rosie', content: '❌ Undo connection error.', ts: Date.now() }])
+    } finally {
+      setUndoing(false)
     }
   }
 
@@ -370,17 +402,30 @@ export default function Editor() {
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendEdit() } }}
               className="w-full bg-[#0f1b35] border border-[#0f3460]/50 rounded-lg px-3 py-2.5 text-[12px] text-[#e2e8f0] placeholder-[#4a5568] outline-none focus:border-[#7c3aed]/60 resize-none transition-colors disabled:opacity-40 font-sans"
             />
-            <button
-              onClick={sendEdit}
-              disabled={!selectedRepo || !instruction.trim() || sending}
-              className="mt-2 w-full bg-gradient-to-r from-[#7c3aed] to-[#4f46e5] hover:from-[#6d28d9] hover:to-[#4338ca] disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-lg py-2 text-[12px] transition-all flex items-center justify-center gap-2"
-            >
-              {sending ? (
-                <><span className="w-3 h-3 rounded-full border-2 border-white/30 border-t-white animate-spin"></span>Working...</>
-              ) : (
-                <>Send ↵</>
+            <div className="mt-2 flex gap-2">
+              {undoData && (
+                <button
+                  onClick={handleUndo}
+                  disabled={undoing || sending}
+                  title={`Undo: ${undoData.description}`}
+                  className="flex-shrink-0 bg-[#0f1b35] border border-[#0f3460]/60 hover:border-[#7c3aed]/40 disabled:opacity-40 disabled:cursor-not-allowed text-[#718096] hover:text-[#a78bfa] font-medium rounded-lg px-3 py-2 text-[11px] transition-all flex items-center gap-1.5 whitespace-nowrap"
+                >
+                  {undoing ? <span className="w-3 h-3 rounded-full border-2 border-[#718096]/30 border-t-[#718096] animate-spin"></span> : '↩'}
+                  Undo
+                </button>
               )}
-            </button>
+              <button
+                onClick={sendEdit}
+                disabled={!selectedRepo || !instruction.trim() || sending}
+                className="flex-1 bg-gradient-to-r from-[#7c3aed] to-[#4f46e5] hover:from-[#6d28d9] hover:to-[#4338ca] disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-lg py-2 text-[12px] transition-all flex items-center justify-center gap-2"
+              >
+                {sending ? (
+                  <><span className="w-3 h-3 rounded-full border-2 border-white/30 border-t-white animate-spin"></span>Working...</>
+                ) : (
+                  <>Send ↵</>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       </div>
