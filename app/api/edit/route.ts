@@ -124,7 +124,7 @@ export async function POST(req: NextRequest) {
     // Try matching by class name if we have one
     if (elementClasses) {
       const classFragments = elementClasses.split(' ').filter(Boolean)
-      idx = lines.findIndex(l => classFragments.some(c => l.includes(c)))
+      idx = lines.findIndex(l => classFragments.some((c: string) => l.includes(c)))
       if (idx >= 0) return idx
     }
     return -1
