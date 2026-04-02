@@ -70,35 +70,28 @@ export default function Editor() {
     setSending(true)
     setDeployState('idle')
 
-    const elementContext = selectedElement
-      ? `a <${selectedElement.tag}> element${selectedElement.classes ? ` with class "${selectedElement.classes.replace('canvas-hover','').replace('canvas-selected','').trim()}"` : ''}${selectedElement.text ? ` that currently contains the text "${selectedElement.text.slice(0, 150)}"` : ''}`
-      : 'the relevant element'
-
-    const message = `You are editing the ${selectedRepo.name} GitHub repo (https://github.com/COBRAskulls/${selectedRepo.name}).
-
-The user has selected ${elementContext}.
-
-Their instruction: ${instruction}
-
-Please:
-1. Find this exact element in the repo's source files
-2. Make the requested change
-3. Push to GitHub when done
-
-Be direct — just find it and change it.`
-
     const userMsg: Message = { role: 'user', content: instruction, ts: Date.now() }
     setMessages(prev => [...prev, userMsg])
     setInstruction('')
 
     try {
-      const res = await fetch('/api/chat', {
+      const res = await fetch('/api/edit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message })
+        body: JSON.stringify({
+          repo: selectedRepo.name,
+          element: selectedElement,
+          instruction,
+        })
       })
       const data = await res.json()
-      const reply = data.reply || data.error || 'No response.'
+      
+      let reply: string
+      if (data.success) {
+        reply = `✅ Done — ${data.description}\n\nPushed to GitHub (commit ${data.commit}). Vercel is deploying now...`
+      } else {
+        reply = `❌ ${data.error || 'Something went wrong'}${data.rosieReply ? '\n\nRosie said: ' + data.rosieReply.slice(0, 300) : ''}`
+      }
       setMessages(prev => [...prev, { role: 'rosie', content: reply, ts: Date.now() }])
 
       // Start polling deploy status
