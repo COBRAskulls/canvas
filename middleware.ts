@@ -22,6 +22,11 @@ export async function middleware(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   const path = request.nextUrl.pathname
 
+  // API routes are always allowed (auth handled per-route if needed)
+  if (path.startsWith('/api/')) {
+    return supabaseResponse
+  }
+
   if (!user && path !== '/login') {
     return NextResponse.redirect(new URL('/login', request.url))
   }

@@ -48,7 +48,10 @@ export default function Editor() {
   const [search, setSearch] = useState('')
   const [selectedElement, setSelectedElement] = useState<SelectedElement | null>(null)
   const [instruction, setInstruction] = useState('')
-  const [messages, setMessages] = useState<Message[]>([])
+  const [messages, setMessages] = useState<Message[]>(() => {
+    if (typeof window === 'undefined') return []
+    try { return JSON.parse(localStorage.getItem('canvas_messages') || '[]') } catch { return [] }
+  })
   const [sending, setSending] = useState(false)
   const [progress, setProgress] = useState<ProgressStep[]>([])
   const [deployState, setDeployState] = useState<DeployState>('idle')
@@ -74,6 +77,13 @@ export default function Editor() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, progress])
+
+  // Persist messages to localStorage
+  useEffect(() => {
+    if (messages.length > 0) {
+      try { localStorage.setItem('canvas_messages', JSON.stringify(messages.slice(-50))) } catch {}
+    }
+  }, [messages])
 
   const filteredRepos = repos.filter(r => r.name.toLowerCase().includes(search.toLowerCase()))
 
@@ -215,7 +225,11 @@ export default function Editor() {
             </div>
             <span className="text-white font-semibold text-sm tracking-tight">Canvas</span>
           </div>
-          <button onClick={signOut} className="text-[11px] text-[#4a5568] hover:text-[#a0aec0] transition-colors">Sign out</button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => { setMessages([]); localStorage.removeItem('canvas_messages') }} className="text-[11px] text-[#4a5568] hover:text-[#a0aec0] transition-colors">Clear</button>
+            <span className="text-[#2d3748]">·</span>
+            <button onClick={signOut} className="text-[11px] text-[#4a5568] hover:text-[#a0aec0] transition-colors">Sign out</button>
+          </div>
         </div>
 
         <div className="px-3 pt-3 pb-1.5">
@@ -237,7 +251,7 @@ export default function Editor() {
               <span className="text-[11px] text-[#4a5568]">Loading...</span>
             </div>
           ) : filteredRepos.map(repo => (
-            <button key={repo.id} onClick={() => { setSelectedRepo(repo); setSelectedElement(null); setMessages([]); setProgress([]) }}
+            <button key={repo.id} onClick={() => { setSelectedRepo(repo); setSelectedElement(null); setProgress([]); if (messages.length > 0) setMessages(prev => [...prev, { role: 'rosie' as const, content: '— ' + repo + ' —', ts: Date.now() }]) }}
               className={`w-full text-left px-2.5 py-2 rounded-md transition-all group ${
                 selectedRepo?.id === repo.id
                   ? 'bg-[#7c3aed]/20 text-white'
