@@ -3,6 +3,55 @@ import { NextRequest, NextResponse } from 'next/server'
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN!
 const GITHUB_API = 'https://api.github.com'
 
+// Repos that need manual Vercel deployment (no GitHub auto-integration)
+const VERCEL_PROJECT_IDS: Record<string, string> = {
+  'cobraspeer-site': 'prj_U2Hf1GGw6OEsKGXMGw7QleU67LoO',
+  'pm-app': 'prj_FXBoP1P8m6w47Q5THRhN99uEkFyS',
+}
+
+async function triggerDeploy(repo: string, changedFile: string, newContent: string): Promise<string | null> {
+  const projectId = VERCEL_PROJECT_IDS[repo]
+  if (!projectId) return null
+
+  // Fetch all files from GitHub
+  const treeRes = await fetch(`${GITHUB_API}/repos/COBRAskulls/${repo}/git/trees/main?recursive=1`, {
+    headers: { Authorization: `token ${GITHUB_TOKEN}`, Accept: 'application/vnd.github.v3+json' }
+  })
+  const treeData = await treeRes.json()
+  const blobs = (treeData.tree || []).filter((f: any) => f.type === 'blob' && !f.path.startsWith('.git'))
+
+  const files: Array<{ file: string; data: string; encoding: string }> = []
+
+  for (const f of blobs) {
+    if (f.path === changedFile) {
+      // Use our already-modified content
+      files.push({ file: f.path, data: Buffer.from(newContent).toString('base64'), encoding: 'base64' })
+    } else {
+      try {
+        const blobRes = await fetch(`${GITHUB_API}/repos/COBRAskulls/${repo}/contents/${f.path}`, {
+          headers: { Authorization: `token ${GITHUB_TOKEN}`, Accept: 'application/vnd.github.v3+json' }
+        })
+        const blob = await blobRes.json()
+        if (blob.content) files.push({ file: f.path, data: blob.content.replace(/\n/g, ''), encoding: 'base64' })
+      } catch (_) {}
+    }
+  }
+
+  const deployRes = await fetch('https://api.vercel.com/v13/deployments', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${process.env.VERCEL_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: repo === 'cobraspeer-site' ? 'cobraspeer' : repo,
+      project: projectId,
+      files,
+      target: 'production',
+      projectSettings: { outputDirectory: '.' }
+    })
+  })
+  const dep = await deployRes.json()
+  return dep.id || null
+}
+
 async function ghGet(path: string) {
   const r = await fetch(`${GITHUB_API}${path}`, {
     headers: { Authorization: `token ${GITHUB_TOKEN}`, Accept: 'application/vnd.github.v3+json' }
@@ -102,11 +151,18 @@ The file is most likely index.html. The find text should be the exact HTML inclu
   })
 
   if (pushResult.commit) {
+    // Trigger Vercel deploy from the updated GitHub files
+    let vercelProjectId: string | null = null
+    try {
+      vercelProjectId = await triggerDeploy(repo, editPlan.file, newContent)
+    } catch (_) {}
+
     return NextResponse.json({ 
       success: true, 
       description: editPlan.description,
       commit: pushResult.commit.sha?.slice(0, 7),
-      file: editPlan.file
+      file: editPlan.file,
+      vercelProjectId,
     })
   }
 
