@@ -115,7 +115,7 @@ export default function Editor() {
       // Refresh iframe
       setTimeout(() => {
         if (iframeRef.current && selectedRepo?.liveUrl) {
-          iframeRef.current.src = selectedRepo.liveUrl + '?nocache=' + Date.now()
+          iframeRef.current.src = `/api/proxy?url=${encodeURIComponent(selectedRepo.liveUrl + '?nocache=' + Date.now())}`
         }
       }, 2000)
     } else if (['BUILDING', 'INITIALIZING', 'QUEUED'].includes(data.state)) {
@@ -206,7 +206,7 @@ export default function Editor() {
           {selectedRepo?.liveUrl ? (
             <IframeWithInjection
               ref={iframeRef}
-              url={selectedRepo.liveUrl}
+              url={`/api/proxy?url=${encodeURIComponent(selectedRepo.liveUrl)}`}
               onElementSelect={setSelectedElement}
             />
           ) : (
@@ -302,6 +302,7 @@ export default function Editor() {
 }
 
 // Iframe with element highlighting injection
+// Proxy handles script injection server-side — iframe just renders the proxied URL
 const IframeWithInjection = function IframeComp({
   url, onElementSelect, ref
 }: {
@@ -309,65 +310,13 @@ const IframeWithInjection = function IframeComp({
   onElementSelect: (el: SelectedElement) => void
   ref: React.RefObject<HTMLIFrameElement | null>
 }) {
-  const [iframeKey, setIframeKey] = useState(0)
-
-  // Inject highlighting script after iframe loads
-  function handleLoad(e: React.SyntheticEvent<HTMLIFrameElement>) {
-    try {
-      const iframe = e.currentTarget
-      const doc = iframe.contentDocument || iframe.contentWindow?.document
-      if (!doc) return
-
-      const script = doc.createElement('script')
-      script.textContent = `
-        (function() {
-          let highlighted = null;
-          const style = document.createElement('style');
-          style.textContent = '.canvas-hover { outline: 2px solid #3b82f6 !important; outline-offset: 2px; cursor: crosshair !important; } .canvas-selected { outline: 2px solid #c9a84c !important; }';
-          document.head.appendChild(style);
-
-          document.addEventListener('mouseover', function(e) {
-            if (highlighted) highlighted.classList.remove('canvas-hover');
-            highlighted = e.target;
-            if (highlighted) highlighted.classList.add('canvas-hover');
-          }, true);
-
-          document.addEventListener('mouseout', function(e) {
-            if (e.target && e.target.classList) e.target.classList.remove('canvas-hover');
-          }, true);
-
-          document.addEventListener('click', function(e) {
-            e.preventDefault();
-            e.stopPropagation();
-            const el = e.target;
-            document.querySelectorAll('.canvas-selected').forEach(x => x.classList.remove('canvas-selected'));
-            el.classList.add('canvas-selected');
-            window.parent.postMessage({
-              type: 'ELEMENT_SELECTED',
-              element: {
-                tag: el.tagName.toLowerCase(),
-                classes: el.className || '',
-                text: el.innerText || el.textContent || '',
-                id: el.id || ''
-              }
-            }, '*');
-          }, true);
-        })();
-      `
-      doc.head.appendChild(script)
-    } catch (_) {
-      // Cross-origin iframe — can't inject. Show message.
-    }
-  }
-
   return (
     <iframe
       ref={ref}
-      key={iframeKey}
       src={url}
-      onLoad={handleLoad}
       className="w-full h-full border-0"
       title="Site Preview"
+      sandbox="allow-scripts allow-same-origin allow-forms"
     />
   )
 }
