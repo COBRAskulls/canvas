@@ -29,15 +29,18 @@ const INJECTION = `
     var el = e.target;
     document.querySelectorAll('.canvas-selected').forEach(function(x){ x.classList.remove('canvas-selected'); });
     el.classList.add('canvas-selected');
-    window.parent.postMessage({
-      type: 'ELEMENT_SELECTED',
-      element: {
-        tag: el.tagName.toLowerCase(),
-        classes: (el.className || '').toString().replace('canvas-selected','').trim(),
-        text: (el.innerText || el.textContent || '').trim().slice(0, 200),
-        id: el.id || ''
-      }
-    }, '*');
+    var target = window.parent !== window ? window.parent : window.top;
+    if (target) {
+      target.postMessage({
+        type: 'ELEMENT_SELECTED',
+        element: {
+          tag: el.tagName.toLowerCase(),
+          classes: (el.className || '').toString().replace('canvas-selected','').trim(),
+          text: (el.innerText || el.textContent || '').trim().slice(0, 200),
+          id: el.id || ''
+        }
+      }, '*');
+    }
   }, true);
 
   // Prevent link navigation
@@ -71,11 +74,12 @@ export async function GET(req: NextRequest) {
       .replace(/src='\/(?!\/)/g, `src='${base}/`)
       .replace(/url\(\/(?!\/)/g, `url(${base}/`)
 
-    // Inject our script just before </body>
-    html = html.replace('</body>', INJECTION + '</body>')
-
-    // If no </body>, append at end
-    if (!html.includes('</body>')) {
+    // Inject our script — try multiple locations
+    if (html.includes('</body>')) {
+      html = html.replace('</body>', INJECTION + '</body>')
+    } else if (html.includes('</html>')) {
+      html = html.replace('</html>', INJECTION + '</html>')
+    } else {
       html += INJECTION
     }
 

@@ -335,7 +335,7 @@ const IframeWithInjection = function IframeComp({
       src={url}
       className="w-full h-full border-0"
       title="Site Preview"
-      sandbox="allow-scripts allow-same-origin allow-forms"
+      referrerPolicy="no-referrer"
     />
   )
 }
