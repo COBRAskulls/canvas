@@ -1,66 +1,43 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN!
-
 export async function POST(req: NextRequest) {
-  const { repo, file, content, description } = await req.json()
-  if (!repo || !file || !content) return NextResponse.json({ error: 'Missing params' }, { status: 400 })
+  const { repo, commitBefore, description } = await req.json()
 
-  // Get current SHA
-  const fileRes = await fetch(`https://api.github.com/repos/COBRAskulls/${repo}/contents/${file}`, {
-    headers: { Authorization: `token ${GITHUB_TOKEN}`, Accept: 'application/vnd.github.v3+json' }
-  })
-  const fileData = await fileRes.json()
-  if (!fileData.sha) return NextResponse.json({ error: 'Could not get current file SHA' }, { status: 500 })
+  if (!repo || !commitBefore) {
+    return NextResponse.json({ error: 'Missing repo or commitBefore' }, { status: 400 })
+  }
 
-  // Restore previous content
-  const pushRes = await fetch(`https://api.github.com/repos/COBRAskulls/${repo}/contents/${file}`, {
-    method: 'PUT',
-    headers: { Authorization: `token ${GITHUB_TOKEN}`, 'Content-Type': 'application/json', Accept: 'application/vnd.github.v3+json' },
-    body: JSON.stringify({
-      message: `Canvas undo: revert "${description}"`,
-      content,
-      sha: fileData.sha,
+  const message = `In the GitHub repo COBRAskulls/${repo}, revert the last change.
+The commit before the change was: ${commitBefore}
+Description of what was changed: ${description}
+
+Revert this change by restoring the file to its state before commit ${commitBefore}.
+Push the revert to GitHub on the main branch.
+Reply in this exact JSON format with no other text: {"file": "...", "description": "...", "commit": "..."}`
+
+  try {
+    const res = await fetch(`${process.env.NEXT_PUBLIC_ROSIE_API_URL}/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.PROXY_API_KEY}`,
+      },
+      body: JSON.stringify({ message }),
     })
-  })
-  const pushData = await pushRes.json()
 
-  if (!pushData.commit) return NextResponse.json({ error: 'Undo push failed', detail: pushData }, { status: 500 })
+    const data = await res.json()
+    const reply = (data.reply || '').trim()
 
-  // Trigger redeploy
-  const VERCEL_PROJECT_IDS: Record<string, string> = {
-    'cobraspeer-site': 'prj_U2Hf1GGw6OEsKGXMGw7QleU67LoO',
-    'pm-app': 'prj_FXBoP1P8m6w47Q5THRhN99uEkFyS',
+    const jsonMatch = reply.match(/\{[\s\S]*?\}/)
+    if (jsonMatch) {
+      try {
+        const parsed = JSON.parse(jsonMatch[0])
+        return NextResponse.json({ success: true, ...parsed, rosieReply: reply })
+      } catch (_) {}
+    }
+
+    return NextResponse.json({ success: false, error: 'Could not parse undo response', rosieReply: reply })
+  } catch (e: any) {
+    return NextResponse.json({ error: e.message }, { status: 500 })
   }
-  const projectId = VERCEL_PROJECT_IDS[repo]
-  if (projectId) {
-    try {
-      const restoredContent = Buffer.from(content, 'base64').toString('utf-8')
-      const treeRes = await fetch(`https://api.github.com/repos/COBRAskulls/${repo}/git/trees/main?recursive=1`, {
-        headers: { Authorization: `token ${GITHUB_TOKEN}` }
-      })
-      const treeData = await treeRes.json()
-      const blobs = (treeData.tree || []).filter((f: any) => f.type === 'blob' && !f.path.startsWith('.git'))
-      const files: any[] = []
-      for (const f of blobs) {
-        if (f.path === file) {
-          files.push({ file: f.path, data: content, encoding: 'base64' })
-        } else {
-          try {
-            const b = await fetch(`https://api.github.com/repos/COBRAskulls/${repo}/contents/${f.path}`, {
-              headers: { Authorization: `token ${GITHUB_TOKEN}` }
-            }).then(r => r.json())
-            if (b.content) files.push({ file: f.path, data: b.content.replace(/\n/g, ''), encoding: 'base64' })
-          } catch (_) {}
-        }
-      }
-      await fetch('https://api.vercel.com/v13/deployments', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${process.env.VERCEL_TOKEN}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: repo === 'cobraspeer-site' ? 'cobraspeer' : repo, project: projectId, files, target: 'production', projectSettings: { outputDirectory: '.' } })
-      })
-    } catch (_) {}
-  }
-
-  return NextResponse.json({ success: true, commit: pushData.commit.sha?.slice(0, 7) })
 }

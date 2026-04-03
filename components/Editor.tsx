@@ -23,23 +23,15 @@ interface Message {
   role: 'user' | 'rosie'
   content: string
   ts: number
-  steps?: ProgressStep[]
 }
 
-interface ProgressStep {
-  label: string
-  state: 'pending' | 'active' | 'done' | 'error'
+interface UndoData {
+  repo: string
+  commitBefore: string
+  description: string
 }
 
-type DeployState = 'idle' | 'waiting' | 'building' | 'live'
-
-const EDIT_STEPS = [
-  'Analyzing element',
-  'Searching source files',
-  'Planning edit',
-  'Applying changes',
-  'Pushing to GitHub',
-]
+type Status = 'idle' | 'working' | 'polling' | 'live'
 
 export default function Editor() {
   const [repos, setRepos] = useState<Repo[]>([])
@@ -49,10 +41,9 @@ export default function Editor() {
   const [selectedElement, setSelectedElement] = useState<SelectedElement | null>(null)
   const [instruction, setInstruction] = useState('')
   const [messages, setMessages] = useState<Message[]>([])
-  const [sending, setSending] = useState(false)
-  const [progress, setProgress] = useState<ProgressStep[]>([])
-  const [deployState, setDeployState] = useState<DeployState>('idle')
-  const [undoData, setUndoData] = useState<{repo: string; file: string; content: string; description: string} | null>(null)
+  const [status, setStatus] = useState<Status>('idle')
+  const [statusText, setStatusText] = useState('')
+  const [undoData, setUndoData] = useState<UndoData | null>(null)
   const [undoing, setUndoing] = useState(false)
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -73,115 +64,119 @@ export default function Editor() {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, progress])
+  }, [messages])
 
-  // Persist messages per-repo to localStorage
+  // Persist per-repo messages
   useEffect(() => {
-    if (!selectedRepo) return
+    if (!selectedRepo || messages.length === 0) return
     try { localStorage.setItem(`canvas_msgs_${selectedRepo.name}`, JSON.stringify(messages.slice(-100))) } catch {}
   }, [messages, selectedRepo])
 
   const filteredRepos = repos.filter(r => r.name.toLowerCase().includes(search.toLowerCase()))
 
-  function advanceProgress(steps: ProgressStep[], currentIndex: number): ProgressStep[] {
-    return steps.map((s, i) => ({
-      ...s,
-      state: i < currentIndex ? 'done' : i === currentIndex ? 'active' : 'pending'
-    }))
+  function loadRepo(repo: Repo) {
+    setSelectedRepo(repo)
+    setSelectedElement(null)
+    setStatus('idle')
+    setStatusText('')
+    try {
+      const saved = JSON.parse(localStorage.getItem(`canvas_msgs_${repo.name}`) || '[]')
+      setMessages(saved)
+    } catch { setMessages([]) }
+  }
+
+  async function getLatestCommit(repo: string): Promise<string> {
+    try {
+      const r = await fetch(`/api/deploy-status?repo=${repo}`)
+      const d = await r.json()
+      return d.latestCommit || ''
+    } catch { return '' }
+  }
+
+  async function pollForCommit(repo: string, expectedCommit: string, startTime: number) {
+    const maxWait = 3 * 60 * 1000 // 3 min
+    if (Date.now() - startTime > maxWait) {
+      setStatus('idle')
+      setStatusText('')
+      return
+    }
+
+    const r = await fetch(`/api/deploy-status?repo=${repo}&commit=${expectedCommit}`)
+    const d = await r.json()
+
+    if (d.found) {
+      setStatus('polling')
+      setStatusText('Commit pushed · deploying...')
+      // Wait 35 seconds for Vercel to auto-deploy
+      setTimeout(() => {
+        setStatus('live')
+        setStatusText('Live ✓')
+        if (iframeRef.current && selectedRepo?.liveUrl) {
+          iframeRef.current.src = `/api/proxy?url=${encodeURIComponent(selectedRepo.liveUrl + '?v=' + Date.now())}`
+        }
+        setTimeout(() => { setStatus('idle'); setStatusText('') }, 5000)
+      }, 35000)
+    } else {
+      setTimeout(() => pollForCommit(repo, expectedCommit, startTime), 5000)
+    }
   }
 
   async function sendEdit() {
-    if (!instruction.trim() || !selectedRepo || sending) return
-    setSending(true)
-    setDeployState('idle')
+    if (!instruction.trim() || !selectedRepo || status === 'working') return
 
     const userMsg: Message = { role: 'user', content: instruction, ts: Date.now() }
     setMessages(prev => [...prev, userMsg])
+    const savedInstruction = instruction
     setInstruction('')
+    setStatus('working')
+    setStatusText('Rosie is working...')
 
-    // Init progress steps
-    const steps: ProgressStep[] = EDIT_STEPS.map((label, i) => ({
-      label, state: i === 0 ? 'active' : 'pending'
-    }))
-    setProgress(steps)
-
-    // Animate through steps with timing that mirrors real work
-    const stepTimings = [600, 1200, 2000, 3500, 0] // 0 = wait for real result
-
-    for (let i = 1; i < EDIT_STEPS.length - 1; i++) {
-      await new Promise(r => setTimeout(r, stepTimings[i - 1]))
-      setProgress(p => advanceProgress(p, i))
-    }
+    // Get current commit SHA before edit (for undo)
+    const commitBefore = await getLatestCommit(selectedRepo.name)
 
     try {
-      // Move to "Applying changes"
-      setProgress(p => advanceProgress(p, 3))
-
       const res = await fetch('/api/edit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           repo: selectedRepo.name,
           element: selectedElement,
-          instruction,
+          instruction: savedInstruction,
         })
       })
       const data = await res.json()
 
       if (data.success) {
-        setProgress(EDIT_STEPS.map((label, i) => ({ label, state: 'done' as const })))
-        const reply = `✅ **${data.description}**\nPushed to GitHub · commit \`${data.commit}\``
+        const reply = `✅ ${data.description}\n\`${data.file}\` · commit \`${data.commit}\``
         setMessages(prev => [...prev, { role: 'rosie', content: reply, ts: Date.now() }])
-        // Store undo data
-        if (data.undo) setUndoData(data.undo)
-        if (selectedRepo.vercelProjectId) {
-          setDeployState('waiting')
-          pollDeploy(selectedRepo.vercelProjectId, Date.now())
-        }
-        // Also trigger deploy polling for direct-deployed repos
-        setDeployState('building')
-        setTimeout(() => setDeployState('live'), 40000)
-      } else {
-        setProgress(EDIT_STEPS.map((label, i) => ({
-          label, state: i < 3 ? 'done' as const : i === 3 ? 'error' as const : 'pending' as const
-        })))
-        setMessages(prev => [...prev, {
-          role: 'rosie',
-          content: `❌ ${data.error || 'Edit failed'}${data.rosieReply ? '\n\n' + data.rosieReply.slice(0, 300) : ''}`,
-          ts: Date.now()
-        }])
-      }
-    } catch (e) {
-      setProgress(EDIT_STEPS.map((label, i) => ({ label, state: i === 0 ? 'error' as const : 'pending' as const })))
-      setMessages(prev => [...prev, { role: 'rosie', content: '❌ Connection error. Try again.', ts: Date.now() }])
-    } finally {
-      setSending(false)
-      setTimeout(() => setProgress([]), 3000)
-    }
-  }
 
-  async function pollDeploy(projectId: string, startTime: number) {
-    if (Date.now() - startTime > 5 * 60 * 1000) { setDeployState('idle'); return }
-    const res = await fetch(`/api/deploy-status?projectId=${projectId}`)
-    const data = await res.json()
-    if (data.state === 'READY') {
-      setDeployState('live')
-      setTimeout(() => {
-        if (iframeRef.current && selectedRepo?.liveUrl) {
-          iframeRef.current.src = `/api/proxy?url=${encodeURIComponent(selectedRepo.liveUrl + '?nocache=' + Date.now())}`
-        }
-      }, 2000)
-    } else if (['BUILDING', 'INITIALIZING', 'QUEUED'].includes(data.state)) {
-      setDeployState('building')
-      setTimeout(() => pollDeploy(projectId, startTime), 5000)
-    } else {
-      setTimeout(() => pollDeploy(projectId, startTime), 8000)
+        // Store undo context
+        if (commitBefore) setUndoData({ repo: selectedRepo.name, commitBefore, description: data.description })
+
+        // Poll GitHub for the commit
+        setStatus('polling')
+        setStatusText('Waiting for GitHub...')
+        pollForCommit(selectedRepo.name, data.commit, Date.now())
+      } else {
+        const reply = data.rosieReply
+          ? `Rosie responded:\n${data.rosieReply}`
+          : `❌ ${data.error || 'Edit failed'}`
+        setMessages(prev => [...prev, { role: 'rosie', content: reply, ts: Date.now() }])
+        setStatus('idle')
+        setStatusText('')
+      }
+    } catch {
+      setMessages(prev => [...prev, { role: 'rosie', content: '❌ Connection error.', ts: Date.now() }])
+      setStatus('idle')
+      setStatusText('')
     }
   }
 
   async function handleUndo() {
     if (!undoData || undoing) return
     setUndoing(true)
+    setMessages(prev => [...prev, { role: 'user', content: `↩ Undo: ${undoData.description}`, ts: Date.now() }])
+
     try {
       const res = await fetch('/api/undo', {
         method: 'POST',
@@ -190,10 +185,11 @@ export default function Editor() {
       })
       const data = await res.json()
       if (data.success) {
-        setMessages(prev => [...prev, { role: 'rosie', content: `↩️ Reverted "${undoData.description}" (commit ${data.commit})`, ts: Date.now() }])
+        setMessages(prev => [...prev, { role: 'rosie', content: `↩️ Reverted · \`${data.commit}\``, ts: Date.now() }])
         setUndoData(null)
-        setDeployState('building')
-        setTimeout(() => setDeployState('live'), 40000)
+        setStatus('polling')
+        setStatusText('Deploying revert...')
+        pollForCommit(undoData.repo, data.commit, Date.now())
       } else {
         setMessages(prev => [...prev, { role: 'rosie', content: `❌ Undo failed: ${data.error}`, ts: Date.now() }])
       }
@@ -222,12 +218,11 @@ export default function Editor() {
             <span className="text-white font-semibold text-sm tracking-tight">Canvas</span>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={() => {
-              setMessages([])
-              if (selectedRepo) localStorage.removeItem(`canvas_msgs_${selectedRepo.name}`)
-            }} className="text-[11px] text-[#4a5568] hover:text-[#a0aec0] transition-colors">Clear</button>
-            <span className="text-[#2d3748]">·</span>
-            <button onClick={signOut} className="text-[11px] text-[#4a5568] hover:text-[#a0aec0] transition-colors">Sign out</button>
+            {selectedRepo && (
+              <button onClick={() => { setMessages([]); if (selectedRepo) localStorage.removeItem(`canvas_msgs_${selectedRepo.name}`) }}
+                className="text-[10px] text-[#4a5568] hover:text-[#718096] transition-colors">Clear</button>
+            )}
+            <button onClick={signOut} className="text-[10px] text-[#4a5568] hover:text-[#a0aec0] transition-colors">Sign out</button>
           </div>
         </div>
 
@@ -250,17 +245,8 @@ export default function Editor() {
               <span className="text-[11px] text-[#4a5568]">Loading...</span>
             </div>
           ) : filteredRepos.map(repo => (
-            <button key={repo.id} onClick={() => {
-              setSelectedRepo(repo)
-              setSelectedElement(null)
-              setProgress([])
-              // Load per-repo message history
-              try {
-                const saved = JSON.parse(localStorage.getItem(`canvas_msgs_${repo.name}`) || '[]')
-                setMessages(saved)
-              } catch { setMessages([]) }
-            }}
-              className={`w-full text-left px-2.5 py-2 rounded-md transition-all group ${
+            <button key={repo.id} onClick={() => loadRepo(repo)}
+              className={`w-full text-left px-2.5 py-2 rounded-md transition-all ${
                 selectedRepo?.id === repo.id
                   ? 'bg-[#7c3aed]/20 text-white'
                   : 'hover:bg-[#0f3460]/40 text-[#718096]'
@@ -288,14 +274,18 @@ export default function Editor() {
           <div className="flex-1 bg-[#0f1b35] border border-[#0f3460]/50 rounded px-2.5 py-0.5 text-[11px] text-[#4a5568] font-mono truncate">
             {selectedRepo?.liveUrl || 'select a project'}
           </div>
-          {deployState !== 'idle' && (
+          {status !== 'idle' && (
             <div className={`flex items-center gap-1.5 text-[11px] font-medium px-2 py-0.5 rounded ${
-              deployState === 'live'
-                ? 'text-emerald-400 bg-emerald-400/10'
-                : 'text-amber-400 bg-amber-400/10'
+              status === 'live' ? 'text-emerald-400 bg-emerald-400/10' :
+              status === 'working' ? 'text-violet-400 bg-violet-400/10' :
+              'text-amber-400 bg-amber-400/10'
             }`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${deployState === 'live' ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`}></span>
-              {deployState === 'live' ? 'Live' : 'Deploying...'}
+              <span className={`w-1.5 h-1.5 rounded-full ${
+                status === 'live' ? 'bg-emerald-400' :
+                status === 'working' ? 'bg-violet-400 animate-pulse' :
+                'bg-amber-400 animate-pulse'
+              }`}></span>
+              {statusText}
             </div>
           )}
         </div>
@@ -329,23 +319,19 @@ export default function Editor() {
         <div className="p-3.5 border-b border-[#0f3460]/60">
           <div className="text-[10px] font-semibold text-[#4a5568] uppercase tracking-widest mb-2.5">Selected Element</div>
           {selectedElement ? (
-            <div className="bg-[#0f1b35] rounded-lg p-3 border border-[#0f3460]/50 space-y-2.5">
+            <div className="bg-[#0f1b35] rounded-lg p-3 border border-[#0f3460]/50 space-y-2">
               <div className="flex items-center gap-2">
                 <span className="text-[#7c3aed] font-mono text-xs">&lt;{selectedElement.tag}&gt;</span>
                 {selectedElement.id && <span className="text-[10px] text-[#4a5568] font-mono">#{selectedElement.id}</span>}
               </div>
               {selectedElement.classes && (
-                <div>
-                  <div className="text-[10px] text-[#4a5568] mb-0.5">class</div>
-                  <div className="text-[11px] text-[#718096] font-mono break-all leading-relaxed">
-                    {selectedElement.classes.replace('canvas-hover','').replace('canvas-selected','').trim().slice(0,80)}
-                  </div>
+                <div className="text-[11px] text-[#718096] font-mono break-all leading-relaxed">
+                  {selectedElement.classes.replace('canvas-hover', '').replace('canvas-selected', '').trim().slice(0, 80)}
                 </div>
               )}
               {selectedElement.text && (
-                <div>
-                  <div className="text-[10px] text-[#4a5568] mb-0.5">content</div>
-                  <div className="text-[12px] text-[#e2e8f0] leading-relaxed">"{selectedElement.text.slice(0,100)}"</div>
+                <div className="text-[12px] text-[#e2e8f0] leading-relaxed border-t border-[#0f3460]/40 pt-2">
+                  "{selectedElement.text.slice(0, 120)}"
                 </div>
               )}
             </div>
@@ -363,7 +349,7 @@ export default function Editor() {
           </div>
 
           <div className="flex-1 overflow-y-auto px-3.5 pb-2 space-y-2.5">
-            {messages.length === 0 && !sending && (
+            {messages.length === 0 && (
               <div className="text-[11px] text-[#4a5568] italic leading-relaxed">
                 Select an element, then describe what you want changed.
               </div>
@@ -371,7 +357,7 @@ export default function Editor() {
 
             {messages.map((m, i) => (
               <div key={i} className={m.role === 'user' ? 'flex justify-end' : ''}>
-                <div className={`max-w-[92%] text-[11.5px] rounded-xl px-3 py-2 leading-relaxed whitespace-pre-wrap ${
+                <div className={`max-w-[92%] text-[11.5px] rounded-xl px-3 py-2 leading-relaxed whitespace-pre-wrap font-mono ${
                   m.role === 'user'
                     ? 'bg-[#7c3aed] text-white rounded-tr-sm'
                     : 'bg-[#0f1b35] text-[#a0aec0] border border-[#0f3460]/50 rounded-tl-sm'
@@ -381,36 +367,13 @@ export default function Editor() {
               </div>
             ))}
 
-            {/* Progress indicator */}
-            {sending && progress.length > 0 && (
-              <div className="bg-[#0f1b35] border border-[#0f3460]/50 rounded-xl p-3 space-y-1.5">
-                {progress.map((step, i) => (
-                  <div key={i} className={`flex items-center gap-2.5 text-[11px] transition-all duration-300 ${
-                    step.state === 'active' ? 'text-[#a78bfa]' :
-                    step.state === 'done' ? 'text-[#4a5568] line-through' :
-                    step.state === 'error' ? 'text-red-400' :
-                    'text-[#2d3748]'
-                  }`}>
-                    <span className="flex-shrink-0 w-3.5 flex items-center justify-center">
-                      {step.state === 'done' && <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="#4a5568" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-                      {step.state === 'active' && (
-                        <span className="w-2 h-2 rounded-full bg-[#7c3aed] animate-pulse block"></span>
-                      )}
-                      {step.state === 'pending' && <span className="w-1.5 h-1.5 rounded-full bg-[#2d3748] block mx-auto"></span>}
-                      {step.state === 'error' && <span className="text-red-400 text-xs">✕</span>}
-                    </span>
-                    <span>{step.label}</span>
-                    {step.state === 'active' && (
-                      <span className="ml-auto flex gap-0.5">
-                        {[0,1,2].map(j => (
-                          <span key={j} className="w-1 h-1 rounded-full bg-[#7c3aed]" style={{animation: `bounce 0.8s ${j*0.15}s ease-in-out infinite alternate`}}></span>
-                        ))}
-                      </span>
-                    )}
-                  </div>
-                ))}
+            {status === 'working' && (
+              <div className="flex items-center gap-2 text-[11px] text-[#7c3aed]">
+                <span className="w-3 h-3 rounded-full border-2 border-[#7c3aed]/30 border-t-[#7c3aed] animate-spin flex-shrink-0"></span>
+                Rosie is working...
               </div>
             )}
+
             <div ref={messagesEndRef} />
           </div>
 
@@ -418,8 +381,8 @@ export default function Editor() {
             <textarea
               value={instruction}
               onChange={e => setInstruction(e.target.value)}
-              placeholder={selectedRepo ? (selectedElement ? `Change the selected ${selectedElement.tag} to...` : "Select an element first") : "Select a project"}
-              disabled={!selectedRepo || sending}
+              placeholder={selectedRepo ? (selectedElement ? `Change the selected ${selectedElement.tag}...` : 'Select an element first') : 'Select a project'}
+              disabled={!selectedRepo || status === 'working'}
               rows={3}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendEdit() } }}
               className="w-full bg-[#0f1b35] border border-[#0f3460]/50 rounded-lg px-3 py-2.5 text-[12px] text-[#e2e8f0] placeholder-[#4a5568] outline-none focus:border-[#7c3aed]/60 resize-none transition-colors disabled:opacity-40 font-sans"
@@ -428,9 +391,9 @@ export default function Editor() {
               {undoData && (
                 <button
                   onClick={handleUndo}
-                  disabled={undoing || sending}
+                  disabled={undoing || status === 'working'}
                   title={`Undo: ${undoData.description}`}
-                  className="flex-shrink-0 bg-[#0f1b35] border border-[#0f3460]/60 hover:border-[#7c3aed]/40 disabled:opacity-40 disabled:cursor-not-allowed text-[#718096] hover:text-[#a78bfa] font-medium rounded-lg px-3 py-2 text-[11px] transition-all flex items-center gap-1.5 whitespace-nowrap"
+                  className="flex-shrink-0 bg-[#0f1b35] border border-[#0f3460]/60 hover:border-[#7c3aed]/40 disabled:opacity-40 text-[#718096] hover:text-[#a78bfa] font-medium rounded-lg px-3 py-2 text-[11px] transition-all flex items-center gap-1.5"
                 >
                   {undoing ? <span className="w-3 h-3 rounded-full border-2 border-[#718096]/30 border-t-[#718096] animate-spin"></span> : '↩'}
                   Undo
@@ -438,26 +401,17 @@ export default function Editor() {
               )}
               <button
                 onClick={sendEdit}
-                disabled={!selectedRepo || !instruction.trim() || sending}
+                disabled={!selectedRepo || !instruction.trim() || status === 'working'}
                 className="flex-1 bg-gradient-to-r from-[#7c3aed] to-[#4f46e5] hover:from-[#6d28d9] hover:to-[#4338ca] disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-lg py-2 text-[12px] transition-all flex items-center justify-center gap-2"
               >
-                {sending ? (
+                {status === 'working' ? (
                   <><span className="w-3 h-3 rounded-full border-2 border-white/30 border-t-white animate-spin"></span>Working...</>
-                ) : (
-                  <>Send ↵</>
-                )}
+                ) : 'Send ↵'}
               </button>
             </div>
           </div>
         </div>
       </div>
-
-      <style>{`
-        @keyframes bounce {
-          from { transform: translateY(0); }
-          to { transform: translateY(-3px); }
-        }
-      `}</style>
     </div>
   )
 }
