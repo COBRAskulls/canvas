@@ -40,6 +40,7 @@ export default function Editor() {
   const [search, setSearch] = useState('')
   const [pages, setPages] = useState<string[]>([])
   const [selectedPage, setSelectedPage] = useState<string>('/')
+  const [previewMode, setPreviewMode] = useState<'live' | 'source'>('live')
   const [selectedElement, setSelectedElement] = useState<SelectedElement | null>(null)
   const [instruction, setInstruction] = useState('')
   const [messages, setMessages] = useState<Message[]>([])
@@ -83,6 +84,7 @@ export default function Editor() {
     setStatusText('')
     setPages([])
     setSelectedPage('/')
+    setPreviewMode('live')
     try {
       const saved = JSON.parse(localStorage.getItem(`canvas_msgs_${repo.name}`) || '[]')
       setMessages(saved)
@@ -94,13 +96,29 @@ export default function Editor() {
       .catch(() => {})
   }
 
+  function getIframeSrc(repo: Repo, page: string, mode: 'live' | 'source'): string {
+    if (mode === 'source') {
+      return `/api/source-preview?repo=${encodeURIComponent(repo.name)}&route=${encodeURIComponent(page)}`
+    }
+    if (!repo.liveUrl) return ''
+    const base = repo.liveUrl.replace(/\/$/, '')
+    const url = page === '/' ? base : `${base}${page}`
+    return `/api/proxy?url=${encodeURIComponent(url)}`
+  }
+
   function navigateToPage(page: string) {
     setSelectedPage(page)
     setSelectedElement(null)
-    if (iframeRef.current && selectedRepo?.liveUrl) {
-      const base = selectedRepo.liveUrl.replace(/\/$/, '')
-      const url = page === '/' ? base : `${base}${page}`
-      iframeRef.current.src = `/api/proxy?url=${encodeURIComponent(url + '?v=' + Date.now())}`
+    if (iframeRef.current && selectedRepo) {
+      iframeRef.current.src = getIframeSrc(selectedRepo, page, previewMode)
+    }
+  }
+
+  function switchPreviewMode(mode: 'live' | 'source') {
+    setPreviewMode(mode)
+    setSelectedElement(null)
+    if (iframeRef.current && selectedRepo) {
+      iframeRef.current.src = getIframeSrc(selectedRepo, selectedPage, mode)
     }
   }
 
@@ -130,10 +148,10 @@ export default function Editor() {
       setTimeout(() => {
         setStatus('live')
         setStatusText('Live ✓')
-        if (iframeRef.current && selectedRepo?.liveUrl) {
-          const base = selectedRepo.liveUrl.replace(/\/$/, '')
-          const url = selectedPage === '/' ? base : `${base}${selectedPage}`
-          iframeRef.current.src = `/api/proxy?url=${encodeURIComponent(url + '?v=' + Date.now())}`
+        if (iframeRef.current && selectedRepo) {
+          // Append cache buster only for live mode
+          const src = getIframeSrc(selectedRepo, selectedPage, previewMode)
+          iframeRef.current.src = previewMode === 'live' ? src + (src.includes('?') ? '&' : '?') + 'v=' + Date.now() : src
         }
         setTimeout(() => { setStatus('idle'); setStatusText('') }, 5000)
       }, 35000)
@@ -302,10 +320,9 @@ export default function Editor() {
           {/* Refresh button */}
           <button
             onClick={() => {
-              if (iframeRef.current && selectedRepo?.liveUrl) {
-                const base = selectedRepo.liveUrl.replace(/\/$/, '')
-                const url = selectedPage === '/' ? base : `${base}${selectedPage}`
-                iframeRef.current.src = `/api/proxy?url=${encodeURIComponent(url + '?v=' + Date.now())}`
+              if (iframeRef.current && selectedRepo) {
+                const src = getIframeSrc(selectedRepo, selectedPage, previewMode)
+                iframeRef.current.src = previewMode === 'live' ? src + (src.includes('?') ? '&' : '?') + 'v=' + Date.now() : src
               }
             }}
             disabled={!selectedRepo}
@@ -319,10 +336,36 @@ export default function Editor() {
 
           {/* URL bar */}
           <div className="flex-1 bg-[#0f1b35] border border-[#0f3460]/50 rounded px-2.5 py-0.5 text-[11px] text-[#4a5568] font-mono truncate">
-            {selectedRepo?.liveUrl
-              ? `${selectedRepo.liveUrl.replace(/\/$/, '')}${selectedPage === '/' ? '' : selectedPage}`
+            {selectedRepo
+              ? previewMode === 'source'
+                ? `source: ${selectedRepo.name}${selectedPage}`
+                : selectedRepo.liveUrl
+                  ? `${selectedRepo.liveUrl.replace(/\/$/, '')}${selectedPage === '/' ? '' : selectedPage}`
+                  : 'no live URL'
               : 'select a project'}
           </div>
+
+          {/* Live / Source toggle */}
+          {selectedRepo && (
+            <div className="flex-shrink-0 flex items-center bg-[#0f1b35] border border-[#0f3460]/50 rounded overflow-hidden">
+              <button
+                onClick={() => switchPreviewMode('live')}
+                className={`px-2.5 py-0.5 text-[11px] font-medium transition-colors ${
+                  previewMode === 'live'
+                    ? 'bg-[#7c3aed]/30 text-[#a78bfa]'
+                    : 'text-[#4a5568] hover:text-[#718096]'
+                }`}
+              >Live</button>
+              <button
+                onClick={() => switchPreviewMode('source')}
+                className={`px-2.5 py-0.5 text-[11px] font-medium transition-colors ${
+                  previewMode === 'source'
+                    ? 'bg-[#7c3aed]/30 text-[#a78bfa]'
+                    : 'text-[#4a5568] hover:text-[#718096]'
+                }`}
+              >Source</button>
+            </div>
+          )}
 
           {/* Page selector */}
           {pages.length > 1 && (
@@ -354,14 +397,30 @@ export default function Editor() {
         </div>
 
         <div className="flex-1 relative bg-[#1a1a2e]">
-          {selectedRepo?.liveUrl ? (
-            <iframe
-              ref={iframeRef}
-              src={`/api/proxy?url=${encodeURIComponent(selectedRepo.liveUrl.replace(/\/$/, '') + (selectedPage === '/' ? '' : selectedPage))}`}
-              className="w-full h-full border-0"
-              title="Preview"
-              referrerPolicy="no-referrer"
-            />
+          {selectedRepo ? (
+            previewMode === 'source' || selectedRepo.liveUrl ? (
+              <iframe
+                ref={iframeRef}
+                src={getIframeSrc(selectedRepo, selectedPage, previewMode)}
+                className="w-full h-full border-0"
+                title="Preview"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <div className="flex items-center justify-center h-full">
+                <div className="text-center space-y-3 max-w-xs px-6">
+                  <div className="text-3xl">🔗</div>
+                  <p className="text-[13px] text-[#718096] font-medium">No live URL for this repo</p>
+                  <p className="text-[11px] text-[#4a5568]">Switch to Source mode to browse and edit the code directly.</p>
+                  <button
+                    onClick={() => switchPreviewMode('source')}
+                    className="mt-2 px-4 py-2 bg-[#7c3aed]/20 hover:bg-[#7c3aed]/30 border border-[#7c3aed]/30 rounded-lg text-[12px] text-[#a78bfa] font-medium transition-colors"
+                  >
+                    Switch to Source mode
+                  </button>
+                </div>
+              </div>
+            )
           ) : (
             <div className="flex items-center justify-center h-full">
               <div className="text-center space-y-3">
