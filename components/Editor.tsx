@@ -265,27 +265,45 @@ export default function Editor() {
 
       {/* CENTER PREVIEW */}
       <div className="flex-1 flex flex-col min-w-0">
-        <div className="h-9 bg-[#16213e] border-b border-[#0f3460]/60 flex items-center px-4 gap-3">
-          <div className="flex gap-1.5">
+        <div className="h-9 bg-[#16213e] border-b border-[#0f3460]/60 flex items-center px-4 gap-2">
+          <div className="flex gap-1.5 flex-shrink-0">
             <div className="w-2.5 h-2.5 rounded-full bg-[#ff5f57]/70"></div>
             <div className="w-2.5 h-2.5 rounded-full bg-[#febc2e]/70"></div>
             <div className="w-2.5 h-2.5 rounded-full bg-[#28c840]/70"></div>
           </div>
+
+          {/* Refresh button */}
+          <button
+            onClick={() => {
+              if (iframeRef.current && selectedRepo?.liveUrl) {
+                iframeRef.current.src = `/api/proxy?url=${encodeURIComponent(selectedRepo.liveUrl + '?v=' + Date.now())}`
+              }
+            }}
+            disabled={!selectedRepo}
+            title="Refresh preview"
+            className="flex-shrink-0 w-6 h-6 rounded flex items-center justify-center text-[#4a5568] hover:text-[#a0aec0] hover:bg-[#0f3460]/40 disabled:opacity-30 transition-all"
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+              <path d="M13.65 2.35A8 8 0 1 0 15 8h-2a6 6 0 1 1-1.05-3.35L9 7h6V1l-1.35 1.35z" fill="currentColor"/>
+            </svg>
+          </button>
+
           <div className="flex-1 bg-[#0f1b35] border border-[#0f3460]/50 rounded px-2.5 py-0.5 text-[11px] text-[#4a5568] font-mono truncate">
             {selectedRepo?.liveUrl || 'select a project'}
           </div>
+
           {status !== 'idle' && (
-            <div className={`flex items-center gap-1.5 text-[11px] font-medium px-2 py-0.5 rounded ${
+            <div className={`flex-shrink-0 flex items-center gap-1.5 text-[11px] font-medium px-2 py-0.5 rounded ${
               status === 'live' ? 'text-emerald-400 bg-emerald-400/10' :
               status === 'working' ? 'text-violet-400 bg-violet-400/10' :
               'text-amber-400 bg-amber-400/10'
             }`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${
+              <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
                 status === 'live' ? 'bg-emerald-400' :
                 status === 'working' ? 'bg-violet-400 animate-pulse' :
                 'bg-amber-400 animate-pulse'
               }`}></span>
-              {statusText}
+              <span className="whitespace-nowrap">{statusText}</span>
             </div>
           )}
         </div>
@@ -377,7 +395,29 @@ export default function Editor() {
             <div ref={messagesEndRef} />
           </div>
 
-          <div className="p-3.5 border-t border-[#0f3460]/60">
+          <div className="p-3.5 border-t border-[#0f3460]/60 space-y-2.5">
+
+            {/* Undo bar — always visible when undo is available */}
+            {undoData && (
+              <div className="flex items-center gap-2 bg-[#1e1040] border border-[#7c3aed]/25 rounded-lg px-3 py-2">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" className="flex-shrink-0 text-[#a78bfa]">
+                  <path d="M1.5 3.5L4 1v2.5H10a5.5 5.5 0 0 1 0 11H5v-2h5a3.5 3.5 0 0 0 0-7H4V8L1.5 5.5l2.5-2z" fill="currentColor"/>
+                </svg>
+                <span className="flex-1 text-[11px] text-[#a78bfa] truncate">{undoData.description}</span>
+                <button
+                  onClick={handleUndo}
+                  disabled={undoing || status === 'working'}
+                  className="flex-shrink-0 text-[11px] font-semibold text-[#7c3aed] hover:text-white bg-[#7c3aed]/15 hover:bg-[#7c3aed]/30 border border-[#7c3aed]/30 hover:border-[#7c3aed]/60 rounded-md px-2.5 py-1 transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
+                >
+                  {undoing
+                    ? <span className="w-2.5 h-2.5 rounded-full border-2 border-[#7c3aed]/30 border-t-[#7c3aed] animate-spin"></span>
+                    : null
+                  }
+                  Undo
+                </button>
+              </div>
+            )}
+
             <textarea
               value={instruction}
               onChange={e => setInstruction(e.target.value)}
@@ -387,28 +427,16 @@ export default function Editor() {
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendEdit() } }}
               className="w-full bg-[#0f1b35] border border-[#0f3460]/50 rounded-lg px-3 py-2.5 text-[12px] text-[#e2e8f0] placeholder-[#4a5568] outline-none focus:border-[#7c3aed]/60 resize-none transition-colors disabled:opacity-40 font-sans"
             />
-            <div className="mt-2 flex gap-2">
-              {undoData && (
-                <button
-                  onClick={handleUndo}
-                  disabled={undoing || status === 'working'}
-                  title={`Undo: ${undoData.description}`}
-                  className="flex-shrink-0 bg-[#0f1b35] border border-[#0f3460]/60 hover:border-[#7c3aed]/40 disabled:opacity-40 text-[#718096] hover:text-[#a78bfa] font-medium rounded-lg px-3 py-2 text-[11px] transition-all flex items-center gap-1.5"
-                >
-                  {undoing ? <span className="w-3 h-3 rounded-full border-2 border-[#718096]/30 border-t-[#718096] animate-spin"></span> : '↩'}
-                  Undo
-                </button>
-              )}
-              <button
-                onClick={sendEdit}
-                disabled={!selectedRepo || !instruction.trim() || status === 'working'}
-                className="flex-1 bg-gradient-to-r from-[#7c3aed] to-[#4f46e5] hover:from-[#6d28d9] hover:to-[#4338ca] disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-lg py-2 text-[12px] transition-all flex items-center justify-center gap-2"
-              >
-                {status === 'working' ? (
-                  <><span className="w-3 h-3 rounded-full border-2 border-white/30 border-t-white animate-spin"></span>Working...</>
-                ) : 'Send ↵'}
-              </button>
-            </div>
+
+            <button
+              onClick={sendEdit}
+              disabled={!selectedRepo || !instruction.trim() || status === 'working'}
+              className="w-full bg-gradient-to-r from-[#7c3aed] to-[#4f46e5] hover:from-[#6d28d9] hover:to-[#4338ca] disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-lg py-2.5 text-[12px] transition-all flex items-center justify-center gap-2"
+            >
+              {status === 'working' ? (
+                <><span className="w-3 h-3 rounded-full border-2 border-white/30 border-t-white animate-spin"></span>Working...</>
+              ) : 'Send ↵'}
+            </button>
           </div>
         </div>
       </div>
