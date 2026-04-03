@@ -414,7 +414,7 @@ export default function Editor() {
           <div className="flex-1 overflow-y-auto px-3.5 pb-2 space-y-2.5">
             {messages.length === 0 && (
               <div className="text-[11px] text-[#4a5568] italic leading-relaxed">
-                Select an element, then describe what you want changed.
+                Click an element to target it, or just describe what you want changed — element selection is optional.
               </div>
             )}
 
@@ -466,7 +466,11 @@ export default function Editor() {
             <textarea
               value={instruction}
               onChange={e => setInstruction(e.target.value)}
-              placeholder={selectedRepo ? (selectedElement ? `Change the selected ${selectedElement.tag}...` : 'Select an element first') : 'Select a project'}
+              placeholder={selectedRepo
+                ? (selectedElement
+                    ? `Change the selected ${selectedElement.tag}...`
+                    : 'Describe what to change — click an element or just type what you need...')
+                : 'Select a project'}
               disabled={!selectedRepo || status === 'working'}
               rows={3}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendEdit() } }}
