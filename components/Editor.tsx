@@ -52,6 +52,8 @@ export default function Editor() {
   const [mobileTab, setMobileTab] = useState<MobileTab>('repos')
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const selectedRepoRef = useRef<Repo | null>(null)
+  const selectedPageRef = useRef<string>('/')
   const router = useRouter()
   const supabase = createClient()
 
@@ -67,6 +69,12 @@ export default function Editor() {
       }
       // Proxy detected auth gate or iframe block — auto-switch to source mode
       if (e.data?.type === 'CANVAS_SWITCH_SOURCE') {
+        const repo = selectedRepoRef.current
+        const page = selectedPageRef.current
+        if (repo && iframeRef.current) {
+          // Directly update iframe to source preview — don't wait for React state
+          iframeRef.current.src = `/api/source-preview?repo=${encodeURIComponent(repo.name)}&route=${encodeURIComponent(page)}`
+        }
         setPreviewMode('source')
         setSelectedElement(null)
       }
@@ -79,10 +87,16 @@ export default function Editor() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  // Keep refs in sync with state (always fresh in event handlers)
+  useEffect(() => { selectedRepoRef.current = selectedRepo }, [selectedRepo])
+  useEffect(() => { selectedPageRef.current = selectedPage }, [selectedPage])
+
   // When previewMode changes (including auto-switch from proxy), update iframe
   useEffect(() => {
-    if (!selectedRepo || !iframeRef.current) return
-    iframeRef.current.src = getIframeSrc(selectedRepo, selectedPage, previewMode)
+    const repo = selectedRepoRef.current
+    const page = selectedPageRef.current
+    if (!repo || !iframeRef.current) return
+    iframeRef.current.src = getIframeSrc(repo, page, previewMode)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [previewMode])
 
