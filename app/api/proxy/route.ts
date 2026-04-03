@@ -47,59 +47,39 @@ const INJECTION = `
 </script>
 `
 
-function authGatedPage(url: string): string {
+// Auto-switch page: tells the parent Canvas UI to switch to source mode
+function autoSwitchPage(reason: string): string {
   return `<!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><style>
+<head><meta charset="utf-8">
+<script>
+  // Immediately tell parent to switch to source mode
+  (function() {
+    var target = window.parent !== window ? window.parent : window.top;
+    if (target) {
+      target.postMessage({ type: 'CANVAS_SWITCH_SOURCE', reason: '${reason}' }, '*');
+    }
+  })();
+<\/script>
+<style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: #0f1b35; color: #a0aec0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
          display: flex; align-items: center; justify-content: center; height: 100vh; }
   .card { text-align: center; padding: 2rem; max-width: 380px; }
-  .icon { font-size: 2.5rem; margin-bottom: 1rem; }
-  h2 { color: #e2e8f0; font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem; }
-  p { font-size: 0.8rem; color: #4a5568; line-height: 1.5; margin-bottom: 1.5rem; }
-  a { display: inline-block; background: linear-gradient(135deg, #7c3aed, #4f46e5);
-      color: white; font-size: 0.8rem; font-weight: 600; padding: 0.6rem 1.4rem;
-      border-radius: 8px; text-decoration: none; }
-  a:hover { opacity: 0.85; }
-  .note { margin-top: 1rem; font-size: 0.72rem; color: #2d3748; }
-</style></head>
+  .icon { font-size: 2rem; margin-bottom: 0.75rem; }
+  h2 { color: #e2e8f0; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.4rem; }
+  p { font-size: 0.75rem; color: #4a5568; }
+  .spinner { width: 24px; height: 24px; border: 2px solid #7c3aed33; border-top-color: #7c3aed;
+             border-radius: 50%; animation: spin 0.8s linear infinite; margin: 1rem auto 0; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
 <body>
   <div class="card">
-    <div class="icon">🔒</div>
-    <h2>Login required</h2>
-    <p>This app is behind authentication. Canvas can't preview it directly — open it in a new tab, log in, then use the right panel to describe changes and Rosie will edit the code.</p>
-    <a href="${url}" target="_blank" rel="noopener">Open app ↗</a>
-    <div class="note">Canvas will still edit the code for any page — just describe what needs changing.</div>
-  </div>
-</body>
-</html>`
-}
-
-function iframeBlockedPage(url: string): string {
-  return `<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: #0f1b35; color: #a0aec0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-         display: flex; align-items: center; justify-content: center; height: 100vh; }
-  .card { text-align: center; padding: 2rem; max-width: 380px; }
-  .icon { font-size: 2.5rem; margin-bottom: 1rem; }
-  h2 { color: #e2e8f0; font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem; }
-  p { font-size: 0.8rem; color: #4a5568; line-height: 1.5; margin-bottom: 1.5rem; }
-  a { display: inline-block; background: linear-gradient(135deg, #7c3aed, #4f46e5);
-      color: white; font-size: 0.8rem; font-weight: 600; padding: 0.6rem 1.4rem;
-      border-radius: 8px; text-decoration: none; }
-  a:hover { opacity: 0.85; }
-  .note { margin-top: 1rem; font-size: 0.72rem; color: #2d3748; }
-</style></head>
-<body>
-  <div class="card">
-    <div class="icon">🛡️</div>
-    <h2>Preview blocked</h2>
-    <p>This site blocks being loaded inside a frame. You can still edit it — open it in a new tab to reference it, then describe changes in the right panel.</p>
-    <a href="${url}" target="_blank" rel="noopener">Open site ↗</a>
-    <div class="note">Rosie edits source code directly — preview blocking doesn't stop edits.</div>
+    <div class="icon">📄</div>
+    <h2>Switching to Source mode...</h2>
+    <p>${reason}</p>
+    <div class="spinner"></div>
   </div>
 </body>
 </html>`
@@ -108,7 +88,6 @@ function iframeBlockedPage(url: string): string {
 function isAuthGated(html: string, finalUrl: string): boolean {
   const lower = finalUrl.toLowerCase()
   if (lower.includes('/login') || lower.includes('/signin') || lower.includes('/auth')) return true
-  // Check HTML content for common login page signals
   const bodyLower = html.toLowerCase()
   const loginSignals = ['type="password"', "type='password'", 'sign in', 'log in', 'login form']
   const matches = loginSignals.filter(s => bodyLower.includes(s))
@@ -128,7 +107,6 @@ export async function GET(req: NextRequest) {
       redirect: 'follow',
     })
 
-    // Check if we were redirected to a login page
     const finalUrl = res.url || url
 
     // Check for X-Frame-Options / CSP that would block iframe
@@ -138,16 +116,16 @@ export async function GET(req: NextRequest) {
 
     let html = await res.text()
 
-    // Detect auth gate
+    // Detect auth gate → auto-switch to source
     if (isAuthGated(html, finalUrl)) {
-      return new NextResponse(authGatedPage(url), {
+      return new NextResponse(autoSwitchPage('This app requires login — loading source preview instead.'), {
         headers: { 'Content-Type': 'text/html; charset=utf-8' }
       })
     }
 
-    // Detect iframe block (server header level)
+    // Detect iframe block → auto-switch to source
     if (frameBlocked) {
-      return new NextResponse(iframeBlockedPage(url), {
+      return new NextResponse(autoSwitchPage('This site blocks iframe embedding — loading source preview instead.'), {
         headers: { 'Content-Type': 'text/html; charset=utf-8' }
       })
     }
@@ -183,8 +161,9 @@ export async function GET(req: NextRequest) {
         'Content-Security-Policy': '',
       }
     })
-  } catch (e: any) {
-    return new NextResponse(iframeBlockedPage(url), {
+  } catch {
+    // Network error / blocked — auto-switch to source
+    return new NextResponse(autoSwitchPage('Could not load live site — loading source preview instead.'), {
       headers: { 'Content-Type': 'text/html; charset=utf-8' }
     })
   }

@@ -63,8 +63,12 @@ export default function Editor() {
     const handler = (e: MessageEvent) => {
       if (e.data?.type === 'ELEMENT_SELECTED') {
         setSelectedElement(e.data.element)
-        // On mobile, switch to chat panel when element is selected
         setMobileTab('chat')
+      }
+      // Proxy detected auth gate or iframe block — auto-switch to source mode
+      if (e.data?.type === 'CANVAS_SWITCH_SOURCE') {
+        setPreviewMode('source')
+        setSelectedElement(null)
       }
     }
     window.addEventListener('message', handler)
@@ -74,6 +78,13 @@ export default function Editor() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  // When previewMode changes (including auto-switch from proxy), update iframe
+  useEffect(() => {
+    if (!selectedRepo || !iframeRef.current) return
+    iframeRef.current.src = getIframeSrc(selectedRepo, selectedPage, previewMode)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewMode])
 
   useEffect(() => {
     if (!selectedRepo || messages.length === 0) return
