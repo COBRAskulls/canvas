@@ -38,6 +38,8 @@ export default function Editor() {
   const [loadingRepos, setLoadingRepos] = useState(true)
   const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null)
   const [search, setSearch] = useState('')
+  const [pages, setPages] = useState<string[]>([])
+  const [selectedPage, setSelectedPage] = useState<string>('/')
   const [selectedElement, setSelectedElement] = useState<SelectedElement | null>(null)
   const [instruction, setInstruction] = useState('')
   const [messages, setMessages] = useState<Message[]>([])
@@ -79,10 +81,27 @@ export default function Editor() {
     setSelectedElement(null)
     setStatus('idle')
     setStatusText('')
+    setPages([])
+    setSelectedPage('/')
     try {
       const saved = JSON.parse(localStorage.getItem(`canvas_msgs_${repo.name}`) || '[]')
       setMessages(saved)
     } catch { setMessages([]) }
+    // Fetch pages for this repo
+    fetch(`/api/pages?repo=${encodeURIComponent(repo.name)}`)
+      .then(r => r.json())
+      .then(d => { if (d.pages) setPages(d.pages) })
+      .catch(() => {})
+  }
+
+  function navigateToPage(page: string) {
+    setSelectedPage(page)
+    setSelectedElement(null)
+    if (iframeRef.current && selectedRepo?.liveUrl) {
+      const base = selectedRepo.liveUrl.replace(/\/$/, '')
+      const url = page === '/' ? base : `${base}${page}`
+      iframeRef.current.src = `/api/proxy?url=${encodeURIComponent(url + '?v=' + Date.now())}`
+    }
   }
 
   async function getLatestCommit(repo: string): Promise<string> {
@@ -112,7 +131,9 @@ export default function Editor() {
         setStatus('live')
         setStatusText('Live ✓')
         if (iframeRef.current && selectedRepo?.liveUrl) {
-          iframeRef.current.src = `/api/proxy?url=${encodeURIComponent(selectedRepo.liveUrl + '?v=' + Date.now())}`
+          const base = selectedRepo.liveUrl.replace(/\/$/, '')
+          const url = selectedPage === '/' ? base : `${base}${selectedPage}`
+          iframeRef.current.src = `/api/proxy?url=${encodeURIComponent(url + '?v=' + Date.now())}`
         }
         setTimeout(() => { setStatus('idle'); setStatusText('') }, 5000)
       }, 35000)
@@ -152,6 +173,12 @@ export default function Editor() {
 
         // Store undo context
         if (commitBefore) setUndoData({ repo: selectedRepo.name, commitBefore, description: data.description })
+
+        // Reload pages list in case new pages were added
+        fetch(`/api/pages?repo=${encodeURIComponent(selectedRepo.name)}`)
+          .then(r => r.json())
+          .then(d => { if (d.pages) setPages(d.pages) })
+          .catch(() => {})
 
         // Poll GitHub for the commit
         setStatus('polling')
@@ -276,7 +303,9 @@ export default function Editor() {
           <button
             onClick={() => {
               if (iframeRef.current && selectedRepo?.liveUrl) {
-                iframeRef.current.src = `/api/proxy?url=${encodeURIComponent(selectedRepo.liveUrl + '?v=' + Date.now())}`
+                const base = selectedRepo.liveUrl.replace(/\/$/, '')
+                const url = selectedPage === '/' ? base : `${base}${selectedPage}`
+                iframeRef.current.src = `/api/proxy?url=${encodeURIComponent(url + '?v=' + Date.now())}`
               }
             }}
             disabled={!selectedRepo}
@@ -288,9 +317,25 @@ export default function Editor() {
             </svg>
           </button>
 
+          {/* URL bar */}
           <div className="flex-1 bg-[#0f1b35] border border-[#0f3460]/50 rounded px-2.5 py-0.5 text-[11px] text-[#4a5568] font-mono truncate">
-            {selectedRepo?.liveUrl || 'select a project'}
+            {selectedRepo?.liveUrl
+              ? `${selectedRepo.liveUrl.replace(/\/$/, '')}${selectedPage === '/' ? '' : selectedPage}`
+              : 'select a project'}
           </div>
+
+          {/* Page selector */}
+          {pages.length > 1 && (
+            <select
+              value={selectedPage}
+              onChange={e => navigateToPage(e.target.value)}
+              className="flex-shrink-0 bg-[#0f1b35] border border-[#0f3460]/50 rounded px-2 py-0.5 text-[11px] text-[#a0aec0] font-mono outline-none focus:border-[#7c3aed]/60 transition-colors max-w-[140px] cursor-pointer"
+            >
+              {pages.map(p => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </select>
+          )}
 
           {status !== 'idle' && (
             <div className={`flex-shrink-0 flex items-center gap-1.5 text-[11px] font-medium px-2 py-0.5 rounded ${
@@ -312,7 +357,7 @@ export default function Editor() {
           {selectedRepo?.liveUrl ? (
             <iframe
               ref={iframeRef}
-              src={`/api/proxy?url=${encodeURIComponent(selectedRepo.liveUrl)}`}
+              src={`/api/proxy?url=${encodeURIComponent(selectedRepo.liveUrl.replace(/\/$/, '') + (selectedPage === '/' ? '' : selectedPage))}`}
               className="w-full h-full border-0"
               title="Preview"
               referrerPolicy="no-referrer"
